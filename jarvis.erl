@@ -1,6 +1,6 @@
 -module(jarvis).
 % bot functions
--export([start/0, init/0, loop/3, stop/0, reload/0]).
+-export([start/0, init/0, loop/4, stop/0, reload/0]).
 % IRC functions
 -export([join/1, leave/1]).
 -export([op/2, deop/2]).
@@ -18,7 +18,10 @@ start() ->
 init() ->
     Host = read(host),
     BotNick = read(nick),
-    connect(Host, BotNick).
+    Sock = connect(Host, BotNick),
+    Users = trustedUsers(),
+    Checksum = os:cmd("md5sum jarvis.erl"),
+    loop(Sock, BotNick, Users, Checksum).
 
 stop() ->
     ?MODULE ! quit.
@@ -101,8 +104,7 @@ connect(Host, Port, BotNick) ->
     io:format("~n*** ~p CONNECTING ***~n", [BotNick]),
     {ok, Sock} = gen_tcp:connect(Host, Port, [{packet, line},{reuseaddr, true}]),
     irc_connect(Sock, Host, BotNick),
-    Users = trustedUsers(),
-    loop(Sock, BotNick, Users).
+    Sock.
 
 disconnect(Sock, BotNick) ->
     irc_disconnect(Sock, BotNick),
@@ -119,67 +121,73 @@ extractNick(Data) ->
 
 % LOOP
 
-loop(Sock, BotNick, Users) ->
+loop(Sock, BotNick, Users, Checksum) ->
     receive
         {tcp, Sock, Data} ->
             io:format("~s", [Data]), % DEBUG
             TokenizedData = formatData(Data),
             evaluate(Sock, BotNick, Users, TokenizedData),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         quit ->
             shutdown(Sock, BotNick);
 
         reload ->
-            io:format("~n*** JARVIS RELOADING ***~n"),
-            case compile:file(?MODULE) of
-                {ok, ?MODULE} ->
-                    code:purge(?MODULE),
-                    code:load_file(?MODULE),
-                    ?MODULE:loop(Sock, BotNick, Users);
-                _ ->
-                    io:format("~n*** ERROR COMPILATION FAILED ***~n"),
-                    loop(Sock, BotNick, Users)
+            NewChecksum = os:cmd("md5sum jarvis.erl"),
+            case Checksum =:= NewChecksum  of
+                true ->
+                    loop(Sock, BotNick, Users, Checksum);
+                _Else ->
+                    io:format("~n*** JARVIS RELOADING ***~n"),
+                    case compile:file(?MODULE) of
+                        {ok, ?MODULE} ->
+                            code:purge(?MODULE),
+                            code:load_file(?MODULE),
+                            ?MODULE:loop(Sock, BotNick, Users, NewChecksum);
+                        _ ->
+                            io:format("~n*** ERROR COMPILATION FAILED ***~n"),
+                            loop(Sock, BotNick, Users, NewChecksum)
+                    end
             end;
 
         {join, Channel} ->
             irc_join(Sock, Channel),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {part, Channel} ->
             irc_part(Sock, Channel),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {op, Channel, Nick} ->
             irc_op(Sock, sanitizeChannel(Channel), Nick),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {deop, Channel, Nick} ->
             irc_deop(Sock, Channel, Nick),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {who, Nick} ->
             irc_who(Sock, Nick),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {names, Channel} ->
             irc_names(Sock, Channel),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {privmsg, Target, Msg} ->
             irc_privmsg(Sock, Target, Msg),
-            loop(Sock, BotNick, Users);
+            loop(Sock, BotNick, Users, Checksum);
 
         {config, write, users, NewUsers} ->
             writeConfig(users, NewUsers),
-            loop(Sock, BotNick, NewUsers);
+            loop(Sock, BotNick, NewUsers, Checksum);
 
         {config, list, To, Element} ->
             Data = read(Element),
             % This will surely fuck up if we pass it a string...
             lists:foreach(fun(E) -> irc_privmsg(Sock, To, E) end, Data),
             %irc_privmsg(Sock, To, Data),
-            loop(Sock, BotNick, Users)
+            loop(Sock, BotNick, Users, Checksum)
     end.
 
 
