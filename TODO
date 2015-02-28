@@ -1,0 +1,8 @@
+There should probably be some
+jarvis:createConfiguration(Host,Channel(s),User(s)) function to make default
+configuration and write it.
+
+Then start/0 could have error checking to see that ~/.jarvis.d actually exists,
+and if not, print an error message prompting user to first run
+createConfiguration(H,C,U)
+
